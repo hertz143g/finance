@@ -1,0 +1,10 @@
+import {readFile,writeFile} from 'node:fs/promises';
+import {pbkdf2Sync,randomBytes,createCipheriv} from 'node:crypto';
+const password=process.env.VAULT_PASSWORD;if(!password)throw Error('Set VAULT_PASSWORD for this one-time private import.');
+const transactions=JSON.parse(await readFile('transactions.private.json','utf8'));
+const plan=JSON.parse(await readFile('settings.private.json','utf8'));
+const salt=randomBytes(16),iv=randomBytes(12),key=pbkdf2Sync(password,salt,310000,32,'sha256');
+const cipher=createCipheriv('aes-256-gcm',key,iv);
+const ciphertext=Buffer.concat([cipher.update(JSON.stringify({transactions,plan,budgets:{}}),'utf8'),cipher.final(),cipher.getAuthTag()]);
+await writeFile('lib/initial-vault.json',JSON.stringify({version:1,salt:salt.toString('base64'),iv:iv.toString('base64'),data:ciphertext.toString('base64')}));
+console.log('Encrypted initial data prepared.');

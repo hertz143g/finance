@@ -1,17 +1,28 @@
+import {createDecipheriv} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
 import {loginHash} from '../lib/login-config.js';
-import {randomUUID,createHash} from 'node:crypto';
 import {authenticated,checkPassword,token,cookie} from '../lib/auth.js';
-import {read,save,rateLimit} from '../lib/store.js';
-export default async function handler(req,res){res.setHeader('Cache-Control','no-store');res.setHeader('Content-Type','application/json');const reply=(s,x)=>{res.statusCode=s;res.end(JSON.stringify(x))};try{
-if(req.method==='POST'){
-const origin=req.headers.origin;const host=req.headers.host;if(!origin||new URL(origin).host!==host)return reply(403,{error:'Недопустимый источник запроса'});
-const b=typeof req.body==='string'?JSON.parse(req.body):req.body||{};
-if(b.action==='login'){const key=createHash('sha256').update(String(req.headers['x-real-ip']||req.socket?.remoteAddress||'unknown')).digest('hex');if(!await rateLimit(key))return reply(429,{error:'Слишком много попыток. Подождите 15 минут.'});if(typeof b.password!=='string'||b.password.length>256||!checkPassword(b.password,loginHash))return reply(401,{error:'Неверный пароль'});res.setHeader('Set-Cookie',cookie(token()));return reply(200,{ok:true})}
-if(!authenticated(req.headers.cookie))return reply(401,{error:'Войдите в аккаунт'});
-if(b.action==='logout'){res.setHeader('Set-Cookie',cookie('',0));return reply(200,{ok:true})}
-if(b.action==='plan'){const p=b.plan;const validMoney=x=>x===null||(Number.isSafeInteger(x)&&x>=0&&x<=1e12);if(!p||!validMoney(p.living)||!validMoney(p.debtMonthly)||!validMoney(p.available)||!validMoney(p.reserved)||!validMoney(p.tbankMonthly)||!Array.isArray(p.goals)||p.goals.length!==3||p.goals.some(g=>typeof g.name!=='string'||g.name.length>100||!validMoney(g.target)||!validMoney(g.saved)||!Number.isFinite(g.share)||g.share<0||g.share>100||(g.deadline!==''&&!/^\d{4}-\d{2}-\d{2}$/.test(g.deadline)))||Math.abs(p.goals.reduce((s,g)=>s+g.share,0)-100)>.01)return reply(400,{error:'Проверьте суммы и доли целей: вместе должно быть 100%'});const old=(await read()).plan||{};await save('plan',{...old,living:p.living,debtMonthly:p.debtMonthly,available:p.available,reserved:p.reserved,tbankMonthly:p.tbankMonthly,goals:p.goals});return reply(200,{ok:true})}
-if(b.action==='budget'){if(typeof b.category!=='string'||!b.category.trim()||b.category.length>80||!Number.isSafeInteger(b.amount)||b.amount<0)return reply(400,{error:'Некорректный бюджет'});await save('budget',{category:b.category,amount:b.amount});return reply(200,{ok:true})}
-if(b.action==='transaction'){const t=b.transaction;if(!t||!/^\d{4}-\d{2}-\d{2}$/.test(t.date)||!Number.isFinite(Date.parse(t.date))||new Date(t.date).toISOString().slice(0,10)!==t.date||!Number.isSafeInteger(t.amount)||t.amount===0||Math.abs(t.amount)>1e12||!['income','expense','internal','refund','investment','debt'].includes(t.kind)||typeof t.category!=='string'||!t.category.trim()||t.category.length>80||typeof t.description!=='string'||t.description.length>500||typeof t.comment!=='string'||t.comment.length>1000)return reply(400,{error:'Проверьте поля операции'});if((['expense','debt'].includes(t.kind)&&t.amount>0)||(['income','refund'].includes(t.kind)&&t.amount<0))return reply(400,{error:'Знак суммы не соответствует типу'});const data=await read();const old=t.id?data.transactions.find(x=>x.id===t.id):null;if(t.id&&!old)return reply(404,{error:'Операция не найдена'});await save('transaction',{...old,id:old?.id||randomUUID(),date:t.date,amount:t.amount,kind:t.kind,category:t.category,description:t.description,comment:t.comment,review:false});return reply(200,{ok:true})}
-return reply(400,{error:'Неизвестное действие'})}
-if(req.method!=='GET')return reply(405,{error:'Метод не поддерживается'});if(!authenticated(req.headers.cookie))return reply(401,{error:'Войдите в аккаунт'});return reply(200,await read());
-}catch(e){console.error(e.message);return reply(500,{error:'Не удалось выполнить запрос. Проверьте подключение к базе.'})}}
+const attempts=new Map();
+function allowed(ip){const now=Date.now();for(const [k,v]of attempts)if(v.until<now)attempts.delete(k);let a=attempts.get(ip);if(!a){a={count:0,until:now+900000};attempts.set(ip,a)}return ++a.count<=10}
+export default async function handler(req,res){
+ res.setHeader('Cache-Control','private, no-store');res.setHeader('Content-Type','application/json');
+ const reply=(status,body)=>{res.statusCode=status;res.end(JSON.stringify(body))};
+ try{
+  if(req.method==='POST'){
+   const origin=req.headers.origin;if(!origin||new URL(origin).host!==req.headers.host)return reply(403,{error:'Недопустимый источник запроса'});
+   const body=typeof req.body==='string'?JSON.parse(req.body):req.body||{};
+   if(body.action==='login'){
+    if(!allowed(String(req.headers['x-real-ip']||req.socket?.remoteAddress||'unknown')))return reply(429,{error:'Слишком много попыток. Подождите 15 минут.'});
+    if(typeof body.password!=='string'||body.password.length>256||!checkPassword(body.password,loginHash))return reply(401,{error:'Неверный пароль'});
+    res.setHeader('Set-Cookie',cookie(token()));return reply(200,{ok:true});
+   }
+   if(body.action==='logout'){res.setHeader('Set-Cookie',cookie('',0));return reply(200,{ok:true})}
+   return reply(400,{error:'Неизвестное действие'});
+  }
+  if(req.method!=='GET')return reply(405,{error:'Метод не поддерживается'});
+  if(!authenticated(req.headers.cookie))return reply(401,{error:'Введите пароль'});
+  let envelope=JSON.parse(await readFile(new URL('../lib/initial-vault.json',import.meta.url),'utf8'));
+  if(envelope.serverEncrypted){const data=Buffer.from(envelope.data,'base64');const decipher=createDecipheriv('aes-256-gcm',Buffer.from(process.env.VAULT_KEY||'','hex'),Buffer.from(envelope.iv,'base64'));decipher.setAuthTag(data.subarray(-16));envelope=JSON.parse(Buffer.concat([decipher.update(data.subarray(0,-16)),decipher.final()]).toString('utf8'))}
+  return reply(200,envelope);
+ }catch(e){console.error('Request failed:',e.code||e.name);return reply(503,{error:'Не удалось загрузить начальные данные. Попробуйте обновить страницу.'})}
+}
