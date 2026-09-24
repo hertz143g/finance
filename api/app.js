@@ -1,12 +1,12 @@
+import {loginHash} from '../lib/login-config.js';
 import {randomUUID,createHash} from 'node:crypto';
 import {authenticated,checkPassword,token,cookie} from '../lib/auth.js';
 import {read,save,rateLimit} from '../lib/store.js';
 export default async function handler(req,res){res.setHeader('Cache-Control','no-store');res.setHeader('Content-Type','application/json');const reply=(s,x)=>{res.statusCode=s;res.end(JSON.stringify(x))};try{
-if(!process.env.PASSWORD_HASH||!process.env.SESSION_SECRET||process.env.SESSION_SECRET.length<32)return reply(503,{error:'Настройте пароль и SESSION_SECRET на сервере'});
 if(req.method==='POST'){
 const origin=req.headers.origin;const host=req.headers.host;if(!origin||new URL(origin).host!==host)return reply(403,{error:'Недопустимый источник запроса'});
 const b=typeof req.body==='string'?JSON.parse(req.body):req.body||{};
-if(b.action==='login'){const key=createHash('sha256').update(String(req.headers['x-real-ip']||req.socket?.remoteAddress||'unknown')).digest('hex');if(!await rateLimit(key))return reply(429,{error:'Слишком много попыток. Подождите 15 минут.'});if(typeof b.password!=='string'||b.password.length>256||!checkPassword(b.password,process.env.PASSWORD_HASH))return reply(401,{error:'Неверный пароль'});res.setHeader('Set-Cookie',cookie(token()));return reply(200,{ok:true})}
+if(b.action==='login'){const key=createHash('sha256').update(String(req.headers['x-real-ip']||req.socket?.remoteAddress||'unknown')).digest('hex');if(!await rateLimit(key))return reply(429,{error:'Слишком много попыток. Подождите 15 минут.'});if(typeof b.password!=='string'||b.password.length>256||!checkPassword(b.password,loginHash))return reply(401,{error:'Неверный пароль'});res.setHeader('Set-Cookie',cookie(token()));return reply(200,{ok:true})}
 if(!authenticated(req.headers.cookie))return reply(401,{error:'Войдите в аккаунт'});
 if(b.action==='logout'){res.setHeader('Set-Cookie',cookie('',0));return reply(200,{ok:true})}
 if(b.action==='plan'){const p=b.plan;const validMoney=x=>x===null||(Number.isSafeInteger(x)&&x>=0&&x<=1e12);if(!p||!validMoney(p.living)||!validMoney(p.debtMonthly)||!validMoney(p.available)||!validMoney(p.reserved)||!validMoney(p.tbankMonthly)||!Array.isArray(p.goals)||p.goals.length!==3||p.goals.some(g=>typeof g.name!=='string'||g.name.length>100||!validMoney(g.target)||!validMoney(g.saved)||!Number.isFinite(g.share)||g.share<0||g.share>100||(g.deadline!==''&&!/^\d{4}-\d{2}-\d{2}$/.test(g.deadline)))||Math.abs(p.goals.reduce((s,g)=>s+g.share,0)-100)>.01)return reply(400,{error:'Проверьте суммы и доли целей: вместе должно быть 100%'});const old=(await read()).plan||{};await save('plan',{...old,living:p.living,debtMonthly:p.debtMonthly,available:p.available,reserved:p.reserved,tbankMonthly:p.tbankMonthly,goals:p.goals});return reply(200,{ok:true})}
