@@ -1,0 +1,3 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {forecast} from '../public/planner.js';
+test('sequential goals and mandatory payments',()=>{const f=forecast({schedule:[{amount:11700000}],living:7000000,debtMonthly:1300000,tbankMonthly:0,goals:[{target:3400000,saved:0},{target:6800000,saved:0}]});assert.equal(f.free,3400000);assert.equal(f.goals[0].months,1);assert.equal(f.goals[1].months,3);assert.equal(f.goals[1].allocation,0)});
+test('unknown proposal blocks wedding forecast',()=>{const f=forecast({schedule:[{amount:11700000}],living:7000000,debtMonthly:1300000,goals:[{target:null},{target:120000000}]});assert.equal(f.goals[1].months,null);assert.equal(f.goals[1].allocation,0)});

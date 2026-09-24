@@ -1,0 +1,6 @@
+*.private.json
+*.private.md
+.local-data.json
+.env
+work/
+test/
